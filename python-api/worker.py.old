@@ -1,0 +1,331 @@
+# coding=utf-8
+import codecs
+
+DEBUG_FILE = "fields.debug"
+
+
+
+class Worker(object):
+
+	def __init__(self):
+		self.text = None
+		self.special_chars = {'{', '}', '&', '%', '$', '#', '_', '^', '\\', ' '}  # elementos que pueden aparecer con una barra delante en latex
+		self.cm_arg_traducibles = {"section", "subsection", "subsubsection", "paragraph", "iindex", "index", "section*", "subsection*", "subsubsection*", "paragraph*",}
+		self.comandos_no_procesados = ["figure", "wrapfigure", "align*", "equation", "tikzpicture"]
+		self.letrasTraducibles = {"y"}  # cuando se detecten estas letras sueltas en el documento latex, se traducirán.
+		self.saltables = {' ', '\n', ',', '.', '[', ']', ':', '\t', '(', ')', '?', '\r', '¿'}  # elementos que no hace falta traducir al principio y final de los campos a traducir
+		self.texto_en_mates = ["text", "caption"]
+		self.prohibidos = ["\\O"]
+		self.texto_en_mates_procesado = ["\\" + x + "{" for x in self.texto_en_mates]
+		self.comandos_begin = ["\\begin{" + x + "}" for x in self.comandos_no_procesados]
+		self.comandos_end = ["\\end{" + x + "}" for x in self.comandos_no_procesados]
+		self.subs = []
+		self.tams = []
+		self.texto_preprocesado = None
+		self.campos_traducibles = None
+		self.texto_original = None
+		self.mates_quitadas = None
+		self.preprocesado = False
+		self.resaltado_hecho = False
+
+	def preprocesar_texto(self, text_file_content):
+		if self.preprocesado:
+			return
+		self.text = text_file_content
+		i = 0
+
+		while i < len(self.text):  # busqueda del inicio del documento
+			if self.text[i] == '%':  # comentarios no se procesan
+				i += self.hunt_char(i, '\n')  # cursor se mueve al fin del comentario
+
+			if self.text[i] == '\\' and (self.text[i - 1] != '\\'):  # establece inicio del documento
+				tam = self.detect_command(i)
+				bloque = self.text[i:i + tam]  # i+tam es el caracter siguiente al bloque \begin{document}, donde empieza el documento
+				if bloque == "\\begin{document}":
+					self.subs.append(0)  # hay un bloque no traducido que empieza en el caracter 0 del documento y de tamaño i+tam
+					self.tams.append(i + tam)
+					i += tam
+					break
+			if i == len(self.text) - 1:  # no se ha encontrado el inicio del documento
+				print("Syntax error: \\begin{document} not found")
+				exit(0)
+			i += 1
+
+		while i < len(self.text):  # se recorre el documento, una vez descartada la cabecera.
+
+			if self.text[i] == '%':  # comentarios no se traducen
+				fin = self.hunt_char(i, '\n')  # indica tamaño del comentario
+				self.subs.append(i)  # empieza en el caracter i y tiene duracion fin
+				self.tams.append(fin)
+				# print("COMENTARIO:"+self.text[i:i+fin])
+				i += fin
+
+			if (self.text[i] == '\\' and (self.text[i - 1] != '\\')):  # se detectan comandos en el documento de la forma \comando{argumento}
+				tam = self.detect_command(i)
+				bloque = self.text[i:i + tam]
+
+				if bloque in self.comandos_begin:
+					index = self.comandos_begin.index(bloque)
+					fin = self.hunt_string(i, self.comandos_end[index])
+					self.subs.append(i)
+					self.tams.append(fin + len(self.comandos_end[index]))
+					# print("DEBUG. bloque " + self.comandos[index] + ": " + self.text[i:i + fin + len(self.comandos_end[index])])
+					i += fin + len(self.comandos_end[index])
+					continue
+				self.subs.append(i)
+				while (self.text[i + tam:i + tam + 2] == "\\\\" or self.text[i + tam:i + tam + 2] == "\\ "):  # se decartan "\ " y "\\" presentes despues del comando
+					tam += 2
+				self.tams.append(tam)
+				i += tam+1
+				continue
+
+			if self.text[i] == '$':  # se detecta math mode incrustado
+				fin = self.hunt_char(i + 1, '$')
+				if fin == 0: #se cubre el uso de $$ como delimitador
+					fin = self.hunt_string(i+1, "$$")+1
+				# print("MATES:"+self.text[i:i+fin+2])
+				self.subs.append(i)
+				self.tams.append(fin + 2)
+				i += fin + 2
+			# sys.stdout.write(self.text[i])
+			i += 1
+		# Todos los campos matematicos y comandos han sido capturados. Ahora prodecemos a hacer traducibles ciertos argumentos y comandos como \text
+
+		i = 0  # la longitud de subs se va a modificar durante el bucle, por lo que no usamos for in range.
+		max_len = len(self.subs)
+		while i < max_len:  # hay dibujo de la logica de este while
+			for s in self.cm_arg_traducibles:  # este bloque se asegura de que comandos como \section sean traducidos
+				comando = "\\" + s + "{"
+				if self.text[self.subs[i]:self.subs[i] + len(comando)] == comando:
+					fin = self.hunt_char(self.subs[i] + len(comando), '}')
+					# print("original: "+self.text[self.subs[i]:self.subs[i]+self.tams[i]])
+					self.subs.insert(i + 1, self.subs[i] + fin + len(comando))
+					self.tams.insert(i + 1, self.tams[i] - fin - len(comando))
+					self.tams[i] = len(comando)
+					# print("cacho1: "+self.text[self.subs[i]:self.subs[i]+self.tams[i]])
+					# print("cacho2: "+self.text[self.subs[i+1]:self.subs[i+1]+self.tams[i+1]])
+					max_len += 1
+
+			j = self.subs[i] + 5
+			while j < self.subs[i] + self.tams[i]:  # este bloque asegura que los \text sean traducidos
+				for candidato in self.texto_en_mates_procesado: #TODO: cambiar esto por un in
+					if self.text[j - len(candidato):j] == candidato:
+						fin = self.hunt_char(j, '}')
+						#print("original: "+self.text[self.subs[i]:self.subs[i]+self.tams[i]])
+						#print("nuevo field en medio: "+self.text[j:j + fin])
+						if self.text[j:j + fin] in self.prohibidos: #evita que \text{\O} sea detectado
+							continue
+						self.subs.insert(i + 1, j + fin)
+						self.tams.insert(i + 1, self.tams[i] - fin - j + self.subs[i])
+						self.tams[i] = j - self.subs[i]
+						#print("cacho1: "+self.text[self.subs[i]:self.subs[i]+self.tams[i]])
+						#print("cacho2: "+self.text[self.subs[i+1]:self.subs[i+1]+self.tams[i+1]])
+						#print("nuevo field en medio: "+self.text[self.subs[i]+self.tams[i]:self.subs[i+1]])
+						max_len += 1
+					j += 1
+
+			i += 1
+
+		# self.debugListToFile() # método para depurar la captura de comandos
+
+		# Ya tenemos todas las substituciones en el texto, de forma que solo queda el texto a traducir como tal.
+		# Ahora introduciremos marcadores donde hemos hecho la substitucion de un fragmento de latex "no texto" para poder devolverlo luego a su sitio
+
+		nuevo = ""  # texto con las substituciones hechas
+		i = 0
+		j = 0
+		hechas = {}  # lista de substituciones
+		while i < len(self.text):  # recorre el texto
+			if j < len(self.subs) and i >= self.subs[j]:
+				if i < self.subs[j] + self.tams[j]:
+					hechas[j] = self.text[i:self.subs[j] + self.tams[j]]
+					i = self.subs[j] + self.tams[j]
+					nuevo += "SUBB" + str(j) + "BBUS"
+					j += 1
+			if i<len(self.text):
+			    nuevo += self.text[i]
+			i += 1
+		# print(nuevo)
+
+		# proceso de traduccion. (captura de campos a traducir)
+		i = 0
+		capturando = -1  # marca si estamos capturando un campo y donde empezó la captura
+		captura = ""
+		campos = {}  # campos a traducir obtenidos
+		concampos = ""  # texto final oon substituciones hechas y con campos a traducir quitados
+		j = 0
+		while i < len(nuevo):
+			if nuevo[i:i + 4] == "SUBB":  # si escontramos mates donde debemos parar de capturar
+				if capturando != -1:  # si estamos capturando
+					buffer = ""
+					while (captura[len(captura) - 1] in self.saltables):  # miro si hay elementos prescindibles en la captura. Si captura es "" ya es falso automaticamente
+						buffer += captura[-1:]  # me guardo lo que quito
+						captura = captura[:-1]  # quitamos ultimos caracteres prescindibles
+					if (len(captura) != 1 or captura in self.letrasTraducibles):  # solo se traducen ciertas letras que aparezcan solas
+						campos[j] = captura
+						concampos += "CAMP" + str(j) + "PMAC" + buffer[::-1]  # buffer[::-1] pone el string buffer en el orden inverso al que esta guardado, ya que se ha ido guardando quitando caracteres al final
+						j += 1
+					else:
+						concampos += captura + buffer[::-1]
+					captura = ""  # capturado campo. reseteamos maquinaria
+					capturando = -1
+				concampos += nuevo[i:nuevo.index("BBUS", i + 4, i + 20) + 4]  # hecha o no la captura, añadimos al texto la substitucion de mates que nos habia hecho parar
+				i = nuevo.index("BBUS", i + 4, i + 20) + 4  # saltamos mates
+				continue
+			if nuevo[i] in self.saltables and capturando == -1:  # si no estaba capturando, salto elementos prescindibles
+				concampos += nuevo[i]
+				i += 1
+				continue
+			if capturando == -1:  # si no hay elementos prescindibles y no estaba capturando
+				capturando = i  # empiezo a capturar
+			captura += nuevo[i]
+			i += 1
+		# print(concampos)
+		self.texto_preprocesado = concampos
+		self.campos_traducibles = campos
+		self.texto_original = text_file_content
+		self.mates_quitadas = hechas
+		self.preprocesado = True
+
+	def get_campos(self):
+		if self.preprocesado:
+			return self.campos_traducibles
+
+	def set_campos(self, campos):
+		self.campos_traducibles = campos
+
+	def reconstruir(self):
+		self.calcular_resaltado()
+		return self.texto_reconstruido
+
+	def calcular_resaltado(self):
+		# estamos listos para traducir los campos. Pedimos al usuario que los devuelva traducidos
+		# self.swapCamposXml(campos)
+		# RECONSTRUCCION
+		i = 0
+		reconstruido = ""
+		nuevo = self.texto_preprocesado
+		highlight = []  # lista de campos para subrayar en la GUI
+		while i < len(nuevo):
+			if nuevo[i:i + 4] == "CAMP":
+				j = int(nuevo[i + 4:nuevo.index("PMAC", i + 4, i + 20)])
+				highlight.append((len(reconstruido), len(self.campos_traducibles[j])))
+				reconstruido += self.campos_traducibles[j]
+				i = nuevo.index("PMAC", i + 4, i + 20) + 4
+				continue
+			if nuevo[i:i + 4] == "SUBB":
+				j = int(nuevo[i + 4:nuevo.index("BBUS", i + 4, i + 20)])
+				reconstruido += self.mates_quitadas[j]
+				i = nuevo.index("BBUS", i + 4, i + 20) + 4
+				continue
+			reconstruido += nuevo[i]
+			i += 1
+		self.texto_reconstruido = reconstruido
+		self.subrayados = highlight
+		self.resaltado_hecho = True
+		return self.subrayados
+
+	def detect_command(self, posicion):
+		i = 0
+		if self.text[posicion + 1] in self.special_chars:  # comandos de un caracter
+			# print("UN CARACTER"+self.text[posicion:posicion+2])
+			return 2
+		while posicion + i < len(self.text):
+			if self.text[posicion + i] == '{':  # detectamos con llaves
+				fin = self.hunt_char(posicion + i, '}')
+				# print("detectado \"" + self.text[posicion:posicion + i] + "\""+"con comando \""+self.text[posicion+i:posicion + i+fin+1]+"\"")
+				return i + fin + 1
+			elif self.text[posicion + i] == '[':  # detectamos con corchete
+				fin = self.hunt_char(posicion + i, ']')
+				if i == 1:
+					fin = self.hunt_string(posicion + i, "\\]") + 1
+				if i != 1:
+					pass  # aqui tendria los argumentos a un comando
+				# print("detectado \"" + self.text[posicion:posicion + i] + "\""+"con comando \"" + self.text[posicion + i:posicion + i + fin + 1 ]+ "\"")
+				return i + fin + 1
+			elif self.text[posicion + i] == '\n':  # detectamos con salto linea
+				# print("detectado \"" + self.text[posicion:posicion + i] + "\"")
+				return i
+			elif self.text[posicion + i] in self.special_chars | {'=', '(', ')', ','} and i != 0:  # detectamos otros
+				# print("detectado \""+self.text[posicion:posicion+i]+"\"")
+				return i
+			i += 1
+
+	def hunt_char(self, posicion, char):  # metodo que persigue el fin de un bloque con un caracter de fin
+		i = 0
+		count = 1
+		while posicion + i < len(self.text):
+			if char == '}' and i > 0 and self.text[posicion + i] == '{':
+				count += 1
+			if self.text[posicion + i] == char:
+				count -= 1
+				if count < 1:
+					return i
+			i += 1
+		print("ERROR posición " + str(posicion))
+		return -1
+
+	def hunt_string(self, posicion, string):  # metodo que persigue el fin de un bloque con un string de fin
+		i = 0
+		while posicion + i < len(self.text):
+			if self.text[posicion + i] == string[0]:
+				if self.text[posicion + i:posicion + i + len(string)] == string:
+					return i
+			i += 1
+		print("ERROR")
+		return -1
+
+	def debug_list_to_file(self):  # método para depurar la lista de comandos generada
+		file = codecs.open(DEBUG_FILE, "w", "utf-8")
+		for i in range(len(self.subs)):
+			# file.write(str(self.subs[i])+"\t"+str(self.tams[i])+"\n")
+			file.write(self.text[self.subs[i]:self.subs[i] + self.tams[i]] + "\n\n")
+		file.close()
+
+	def get_xml_file(self):
+		xml = ""
+		i = 0
+		for _ in self.campos_traducibles:
+			xml += "<" + str(i) + ">\"" + self.campos_traducibles[i] + "\"</" + str(i) + ">\n"
+			i += 1
+		return xml
+
+	def set_xml_to_campos(self, new_xml):
+		i = 0
+		while i < len(new_xml):
+			#print(new_xml[0:100])
+			#print("aaa"+new_xml[i + 1:new_xml.find('>', i)])
+			j = int(new_xml[i + 1:new_xml.find('>', i)])
+			#print("i="+str(i)+",j="+str(j)+",")
+			#print(new_xml.index(">\"", i) + 2)
+			#print("\"</" + str(j) + ">")
+			#print(new_xml.index("\"</" + str(j) + ">"))
+			#print(new_xml[new_xml.index(">\"", i) + 2:])
+			value = new_xml[new_xml.index(">\"", i) + 2:new_xml.index("\"</" + str(j) + ">")]
+			#print("aaa"+value)
+			self.campos_traducibles[j] = value
+			i = new_xml.index("\"</" + str(j) + ">") + len("\"</" + str(j) + ">")
+			i += 1
+
+
+def swap_campos_xml(campos):
+	# creamos xml
+	xml = ""
+	i = 0
+	for _ in campos:
+		xml += "<" + str(i) + ">\"" + campos[i] + "\"</" + str(i) + ">\n"
+		i += 1
+	with codecs.open("out.xml", "w", "utf-8-sig") as temp:
+		temp.write(xml)
+		temp.close()
+	input("Press Enter to continue...")
+	with codecs.open("trad.xml", "r", "utf-8-sig") as temp:
+		new_xml = temp.read()
+		temp.close()
+	i = 0
+	while i < len(new_xml):
+		j = int(new_xml[i + 1:new_xml.find('>', i)])
+		value = new_xml[new_xml.index(">\"", i) + 2:new_xml.index("\"</" + str(j) + ">")]
+		campos[j] = value
+		i = new_xml.index("\"</" + str(j) + ">") + len("\"</" + str(j) + ">")
+		i += 1

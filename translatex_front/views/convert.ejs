@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>TransLateX: a Latex document translator</title>
+    <link rel="stylesheet" type="text/css" href="/css/style.css">
+    <link href='https://fonts.googleapis.com/css?family=Open+Sans:300' rel='stylesheet' type='text/css'>
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.6.9/angular.min.js"></script>
+    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.6.9/angular-sanitize.min.js"></script>
+    <link rel="stylesheet" type="text/css" href="/css/loading-bar.min.css"/>
+    <script type="text/javascript" src="/js/loading-bar.min.js"></script>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+  </head>
+  <body>
+    <div id="overlay"><div id="loader" class="ldBar label-center" style="width:300px;height:300px" data-preset="circle" data-duration="30s"></div></div>
+    <div class="container principal sombreado">
+      <header>
+        <img src="/img/logo1.png" alt="" id="logo">
+        <h1>TranslateX: generate a set of translatable fields from a LaTeX document and apply external translations to the document</h1>
+      </header>
+      <main class="container contenido sombreado subida" ng-app="translatex" ng-controller="controlador" ng-init="init()">
+        <div class="linea izquierda">
+          <p class="titulo">Uploaded file: {{filename}} </p>
+          <div id="botones" class="derecha">
+            <label for="file-u" class="boton boton-rojo" ng-hide="hide_xml_up">Upload translated XML</label>
+            <label class="boton boton-rojo" ng-click="downloadXML()" ng-hide="hide_xml_down">Download Translation</label>
+            <label class="boton boton-rojo" ng-click="applyTranslation()" ng-hide="hide_apply">Apply & Download tex</label>
+            <input id="file-u" type="file" name="file" class="inputfile" onchange="angular.element(this).scope().uploadXML(this)"/>
+          </div>
+        </div>
+        <label class="boton boton-rojo" ng-click="escanear()" ng-hide="hide_scan">Scan file</label>
+        <div id="visor" class="sombreado" ng-hide="hide_visor">
+          <p id="texto_visor" ng-bind-html="texto_visor"></p>
+        </div>
+      </main>
+    </div>
+    <iframe id="downloader" style="display:none;"></iframe>
+    <script  type="text/javascript" src="/js/convert.js"></script>
+  </body>
+</html>

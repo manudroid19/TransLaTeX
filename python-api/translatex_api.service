@@ -1,0 +1,16 @@
+[Unit]
+Description=TransLaTeX back-end
+After=syslog.target
+
+[Service]
+Type=simple
+ExecStart=/home/prada/python-api/api.py
+User=prada
+# Note Debian/Ubuntu uses 'nogroup', RHEL/Fedora uses 'nobody'
+Environment=PATH=/usr/bin:/usr/local/bin
+WorkingDirectory=/home/prada/python-api
+StandardOutput=syslog
+StandardError=syslog
+
+[Install]
+WantedBy=multi-user.target
